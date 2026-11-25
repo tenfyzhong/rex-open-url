@@ -1,8 +1,8 @@
 # rex-open-url
 
 Pick URLs from the current Rex terminal and open them in your browser.
-Inspired by rmux-open-url. Uses Rex's embedded Lua and Python 3.9+ standard
-library (including curses). No Rust build, fzf, pip packages, or standalone Lua
+Inspired by rmux-open-url. Uses Rex Custom UI, Rex's embedded Lua and the Python
+3.9+ standard library. No Rust build, fzf, pip packages, or standalone Lua
 runtime is required. macOS is live-tested; Linux needs a URL opener and clipboard
 utility, such as xdg-open and wl-copy.
 
@@ -21,25 +21,23 @@ With `dev = { path = "dev" }` in rexpack's setup, a checkout at
 `~/.config/rex/dev/rex-open-url` is used automatically.
 
 The plugin registers its action and bindings when loaded, so keep the default
-eager loading (`lazy = false`). Rex's Lua API and floating layers are required:
-[Lua reference](https://www.superlogical.com/rex/docs/reference/lua).
+eager loading (`lazy = false`). Use a Rex server and app that support
+[Custom UI](https://www.superlogical.com/rex/docs/customize/custom-ui)
+(control API revision 17 or later).
 
 ## Use
 
 Press **prefix + u** (also available in terminal_prefix), or choose
 **Open URL: Pick from Current Pane** in the command palette.
 
-- Type to fuzzy-filter, ignoring case.
-- Up/Down, Ctrl-k/j, or Ctrl-p/n move the cursor; Ctrl-a/e go first/last.
-- Tab toggles selection. Selected URLs remain selected when filtering.
-- Enter opens selected URLs, or the current URL if nothing is selected.
-- Ctrl-y copies the same selection and keeps the picker open.
-- Ctrl-u clears the query; Esc or Ctrl-c cancels.
+Type in Rex's command palette to filter URLs. Use the arrow keys to move and
+press **Return** to open the highlighted URL. **Esc** clears the filter and
+closes the picker when the filter is empty. To copy one URL, choose
+**Open URL: Copy from Current Pane** and press **Return** on the URL.
 
-The picker uses a floating layer over the window, leaving the original tiled
-layout and terminal size unchanged. Closing it restores the previous pane.
-URLs come from the source pane, even when another pane has focus later.
-An empty result is shown as an empty list; no browser is opened automatically.
+The palette leaves the original pane layout and terminal size intact. It reads
+URLs from the pane that launched the action. If more than 2,000 URLs are found,
+Rex first asks for part of a URL to narrow the list to its supported size.
 
 Recognizes http/https/ftp/file URLs, Git SSH URLs (converted to HTTPS without
 a trailing .git), www domains and IPv4 addresses (prefixed with http://), and
@@ -84,8 +82,8 @@ emoji sequences or custom terminal width rules can make that boundary approximat
 Custom patterns use Python regular expressions and replacement syntax:
 `\\g<0>` in Lua represents the complete match; numbered groups are supported.
 Command options are argv arrays, never shell command strings. The URL is appended
-as a single argument to the opener; copied URLs are joined with newlines and
-written to the clipboard command's stdin. Errors stay visible in the picker.
+as a single argument to the opener or written to the clipboard command's stdin.
+Rex reports command failures through the action.
 
 ## Development
 
@@ -95,8 +93,9 @@ REX=/absolute/path/to/rex make integration
 ```
 
 Unit tests use Python unittest and a Lua interpreter (Lua 5.1 or newer).
-GitHub Actions runs these tests. Integration tests require a running Rex;
-they create and remove their own test session, exercise selection, filtering,
-copy/open command delivery and cancellation, and check layout/focus restoration.
-They use temporary recording commands instead of launching browsers or replacing
-your clipboard. They do not reload your configuration.
+GitHub Actions runs these tests. Integration tests require a running Rex. They
+create and remove their own test session, verify the prompt data, test opening,
+copying and cancellation, and check the layout and focus. The default run
+supplies test answers and uses recording commands for the browser and clipboard.
+With the plugin loaded in Rex, set `REX_LIVE_UI=1` to exercise the native
+palette through the connected app and verify that Return opens a local test URL.

@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -44,45 +46,49 @@ class ExtractionTests(unittest.TestCase):
                          'fghij\n')
 
 
-class SelectionTests(unittest.TestCase):
-    def test_fuzzy_filter_and_selection_survive_query(self):
-        model = picker.Selection(['https://a.test', 'https://b.test'])
-        model.toggle()
-        model.query = 'BT'
-        self.assertEqual(model.visible(), ['https://b.test'])
-        self.assertEqual(model.chosen(), ['https://a.test'])
-        model.toggle()
-        self.assertEqual(model.chosen(), model.urls)
-
-    def test_empty_and_current(self):
-        model = picker.Selection(['https://a.test'])
-        self.assertEqual(model.chosen(), model.urls)
-        model.query = 'absent'
-        self.assertEqual(model.chosen(), [])
-
-
 class ProcessTests(unittest.TestCase):
+    @patch('picker.subprocess.run')
+    def test_collect_outputs_links_as_json(self, run):
+        run.return_value.stdout = 'https://example.org/a BUG-23\n\n'
+        with patch.object(sys, 'argv', [
+            'picker.py', 'collect', '--rex', '/rex', '--session', 's', '--pane', 'p',
+            '--rows', '2', '--columns', '80',
+            '--options', json.dumps({'custom_pattern': r'BUG-\d+'}),
+        ]), patch('sys.stdout', new_callable=io.StringIO) as output:
+            picker.main()
+        self.assertEqual(json.loads(output.getvalue()), ['https://example.org/a', 'BUG-23'])
+        run.assert_called_once_with(
+            ['/rex', 'capture', '-s', 's', '-b', 'p', '--format=vt', '--unwrap'],
+            check=True, capture_output=True, text=True, timeout=15)
+
     @patch('picker.subprocess.run')
     def test_open_argv_never_shell(self, run):
         url = 'https://example.org/$(touch%20oops);x'
-        picker.open_urls([url], ['browser', '--new-window'])
+        with patch.object(sys, 'argv', [
+            'picker.py', 'open', '--options', '{"open_command":["browser","--new-window"]}',
+        ]), patch('sys.stdin', io.StringIO(url)):
+            picker.main()
         run.assert_called_once_with(['browser', '--new-window', url], check=True,
                                     timeout=15, capture_output=True, text=True)
 
     @patch('picker.subprocess.run')
     def test_copy_stdin(self, run):
-        picker.copy_urls(['https://a', 'https://b'], ['pbcopy'])
-        run.assert_called_once_with(['pbcopy'], input='https://a\nhttps://b',
+        url = 'https://example.org/路径'
+        with patch.object(sys, 'argv', [
+            'picker.py', 'copy', '--options', '{"copy_command":["clipboard"]}',
+        ]), patch('sys.stdin', io.StringIO(url)):
+            picker.main()
+        run.assert_called_once_with(['clipboard'], input=url,
                                     check=True, timeout=15, capture_output=True, text=True)
 
     @patch('picker.subprocess.run', side_effect=subprocess.CalledProcessError(1, 'open'))
     def test_opener_failure_propagates(self, run):
         with self.assertRaises(subprocess.CalledProcessError):
-            picker.open_urls(['https://a'], ['open'])
+            picker.open_url('https://a', ['open'])
 
 
 class LuaTests(unittest.TestCase):
-    def test_registration_and_layer_target(self):
+    def test_native_selection_and_dispatch(self):
         subprocess.run(['lua', 'tests/plugin.lua'], cwd=ROOT, check=True)
 
 
