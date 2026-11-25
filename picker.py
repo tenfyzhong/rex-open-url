@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Rex URL picker. Runtime dependencies: Python standard library and Rex."""
+"""Collect URLs from Rex or send one URL to an opener or clipboard command."""
 import argparse
-import curses
 import ipaddress
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -88,46 +86,13 @@ def screen_text(text, rows, columns=None):
     return '\n'.join(reversed(kept))
 
 
-class Selection:
-    def __init__(self, urls):
-        self.urls = urls
-        self.query = ''
-        self.index = 0
-        self.selected = set()
-
-    def visible(self):
-        def matches(url):
-            chars = iter(url.casefold())
-            return all(any(c == q for c in chars) for q in self.query.casefold())
-        return [url for url in self.urls if matches(url)]
-
-    def current(self):
-        visible = self.visible()
-        self.index = min(max(self.index, 0), max(0, len(visible) - 1))
-        return visible[self.index] if visible else None
-
-    def toggle(self):
-        current = self.current()
-        if current in self.selected:
-            self.selected.remove(current)
-        elif current:
-            self.selected.add(current)
-
-    def chosen(self):
-        if self.selected:
-            return [url for url in self.urls if url in self.selected]
-        current = self.current()
-        return [current] if current else []
+def open_url(url, command):
+    subprocess.run([*command, url], check=True, timeout=15,
+                   capture_output=True, text=True)
 
 
-def open_urls(urls, command):
-    for url in urls:
-        subprocess.run([*command, url], check=True, timeout=15,
-                       capture_output=True, text=True)
-
-
-def copy_urls(urls, command):
-    subprocess.run(command, input='\n'.join(urls), check=True, timeout=15,
+def copy_url(url, command):
+    subprocess.run(command, input=url, check=True, timeout=15,
                    capture_output=True, text=True)
 
 
@@ -148,92 +113,34 @@ def default_copier():
     raise ValueError('No clipboard command found; configure copy_command')
 
 
-def picker_ui(screen, urls, options):
-    model = Selection(urls)
-    message = ''
-    curses.curs_set(0)
-    curses.raw()
-    curses.nonl()
-    screen.keypad(True)
-    while True:
-        screen.erase()
-        height, width = screen.getmaxyx()
-
-        def line(row, text, style=0):
-            if row < height:
-                try:
-                    screen.addnstr(row, 0, text, max(0, width - 1), style)
-                except curses.error:
-                    pass
-
-        visible = model.visible()
-        model.current()
-        line(0, 'Open URL > ' + model.query, curses.A_BOLD)
-        line(1, 'Enter open | Tab select | Ctrl-y copy | Esc cancel')
-        count = max(1, height - 4)
-        start = max(0, model.index - count + 1)
-        for row, url in enumerate(visible[start:start + count], 2):
-            marker = '[x] ' if url in model.selected else '[ ] '
-            line(row, marker + url, curses.A_REVERSE if row - 2 + start == model.index else 0)
-        line(height - 1, message or '{} URLs / {} selected'.format(len(visible), len(model.selected)))
-        screen.refresh()
-        key = screen.get_wch()
-        if key in ('\x1b', '\x03'):
-            return
-        if key in (curses.KEY_DOWN, '\x0e', '\x0a'):
-            # Ctrl-j is newline, same as Enter on some terminals: Enter uses CR.
-            model.index = min(model.index + 1, max(0, len(visible) - 1))
-        elif key in (curses.KEY_UP, '\x10', '\x0b'):
-            model.index = max(0, model.index - 1)
-        elif key == '\x01':
-            model.index = 0
-        elif key == '\x05':
-            model.index = max(0, len(visible) - 1)
-        elif key == '\t':
-            model.toggle()
-        elif key in ('\r', curses.KEY_ENTER, '\x19'):
-            chosen = model.chosen()
-            if not chosen:
-                message = 'No URLs selected'
-                continue
-            try:
-                if key == '\x19':
-                    copy_urls(chosen, options.copy_command or default_copier())
-                    message = 'Copied {} URL(s)'.format(len(chosen))
-                else:
-                    open_urls(chosen, options.open_command or default_opener())
-                    return
-            except (OSError, ValueError, subprocess.SubprocessError) as error:
-                message = 'Failed: ' + str(error)
-        elif key == '\x15':
-            model.query, model.index = '', 0
-        elif key in (curses.KEY_BACKSPACE, '\x7f', '\b'):
-            model.query, model.index = model.query[:-1], 0
-        elif isinstance(key, str) and key.isprintable():
-            model.query += key
-            model.index = 0
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--rex', required=True)
-    parser.add_argument('--session', required=True)
-    parser.add_argument('--pane', required=True)
-    parser.add_argument('--rows', required=True, type=int)
-    parser.add_argument('--columns', required=True, type=int)
-    parser.add_argument('--options', default='{}')
+    operations = parser.add_subparsers(dest='operation', required=True)
+    collect = operations.add_parser('collect')
+    collect.add_argument('--rex', required=True)
+    collect.add_argument('--session', required=True)
+    collect.add_argument('--pane', required=True)
+    collect.add_argument('--rows', required=True, type=int)
+    collect.add_argument('--columns', required=True, type=int)
+    for operation in (collect, operations.add_parser('open'), operations.add_parser('copy')):
+        operation.add_argument('--options', default='{}')
     args = parser.parse_args()
     options = json.loads(args.options)
-    args.open_command = options.get('open_command')
-    args.copy_command = options.get('copy_command')
+
+    if args.operation == 'open':
+        open_url(sys.stdin.read(), options.get('open_command') or default_opener())
+        return
+    if args.operation == 'copy':
+        copy_url(sys.stdin.read(), options.get('copy_command') or default_copier())
+        return
+
     capture = subprocess.run(
         [args.rex, 'capture', '-s', args.session, '-b', args.pane, '--format=vt', '--unwrap'],
         check=True, capture_output=True, text=True, timeout=15)
-    text = screen_text(capture.stdout, options.get('history_limit') or args.rows,
-                       None if options.get('history_limit') else args.columns)
-    urls = extract(text, options.get('custom_pattern'), options.get('custom_sub'))
-    os.environ.setdefault('ESCDELAY', '25')
-    curses.wrapper(picker_ui, urls, args)
+    history_limit = options.get('history_limit')
+    text = screen_text(capture.stdout, history_limit or args.rows,
+                       None if history_limit else args.columns)
+    print(json.dumps(extract(text, options.get('custom_pattern'), options.get('custom_sub'))))
 
 
 if __name__ == '__main__':
